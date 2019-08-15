@@ -1,4 +1,4 @@
-write_nifti_2_hdr = function(hdr, filename = tempfile()) {
+write_nifti_2_hdr = function(hdr, filename) {
 
   fid = file(filename, open = "wb")
   hdr_size = as.integer(oro.nifti::sizeof_hdr(hdr))
@@ -15,7 +15,8 @@ write_nifti_2_hdr = function(hdr, filename = tempfile()) {
   }
 
   writeBin(as.integer(hdr@"sizeof_hdr"), fid, size=4)
-  writeBin(as.integer(hdr@"magic"), fid, size=1)
+  # writeChar(hdr@magic, fid, nchars = 8, eos = NULL)
+  writeBin(as.integer(hdr@"magic"), fid, size=1) # MYC
   writeBin(as.integer(hdr@"datatype"), fid, size=2)
   writeBin(as.integer(hdr@"bitpix"), fid, size=2)
 
@@ -89,15 +90,55 @@ write_nifti_2_hdr = function(hdr, filename = tempfile()) {
 
 write_cifti = function(res) {
 
-  filename = tempfile()
+  #filename = tempfile()
+  filename = res$filename
+
+  ### XML
+  source("./sample_xml_in_header.R") # Source a script that makes the hard-coded xml object 'cml'
+  cml_string <- toString.XMLNode(cml)
+  cml_string <- rm_white_bracket(text.var = cml_string)
+  cml_string <- cml_string %>% stringr::str_replace_all(c(" <" = "<",
+                                                          "> " = ">")) # remove lead/trailing space
+  cml_string <- rm_white_multiple(text.var = cml_string)
+  cml_string <- rm_white_bracket(text.var = cml_string)
+
+  xmlsize <- nchar(cml_string)
+  xmlpad  <- round((xmlsize+8)/16)*16 - (xmlsize+8) # to pad it to 16bit
+
+  #### ==== Make/edit header === ####
   hdr = res$hdr
-  L = write_nifti_2_hdr(hdr, filename = filename)
+  hdr@vox_offset <- 4+540+8+xmlsize+xmlpad # calculate voxel offset based on xml header size
+  # *** the rest of hdr should be defined here later MYC
+
+
+  L = write_nifti_2_hdr(hdr, filename = filename) # this writes 4 + 540 bytes of data
   fid = L$fid
+
+  ##   Write header extension
+  # 4 bytes with the size of the header, 384 for nifti-1 or 540 for nifti-2
+  # 540 bytes with the nifti-2 header
+  # 4 bytes that indicate the presence of a header extension [1 0 0 0]
+  # 4 bytes with the size of the header extension in big endian?
+  # 4 bytes with the header extension code NIFTI_ECODE_CIFTI [0 0 0 32]
+  # variable number of bytes with the xml section, at the end there might be some empty "junk"
+  # 8 bytes, presumaby with the size and type?
+  # variable number of bytes with the voxel data
+  # the size of the header extension must be an integer multiple of 16 bytes according to http://nifti.nimh.nih.gov/nifti-1/documentation/nifti1fields/nifti1fields_pages/extension.html
+
+  seek(fid, where = 540, origin = "start")
+  writeBin(as.integer(c(1,0,0,0)), fid, size=1) # indicate the presence of a header extension
+  writeBin(as.integer((8+xmlsize+xmlpad)), fid, size=4) # esize = 8 (bytes for esize and etype) + xmlsize + xmlpad
+  writeBin(as.integer(32), fid, size=4) # etype
+  writeChar(cml_string, fid, nchars = xmlsize, eos=NULL) # XML section
+  writeBin(as.integer(rep(0, xmlpad)), fid, size=4) # zero-pad to the next 16 byte boundary
+
+  #### ==== Make/edit data === ####
 
   data = res$data
 
   # reversing things that happened with read_cifti
-  ddata = dim(data)
+  # ddata = dim(data)  # if just entering something with $data?
+  ddata = attr(res$data, "orig_dim") # MYC - if entering a cifti object??
   trans_data = attr(data, "trans")
   if (is.null(trans_data)) {
     trans_data = FALSE
@@ -121,8 +162,7 @@ write_cifti = function(res) {
     data = array(data, dim = orig_dim)
   }
 
-
-  seek(fid, where = hdr@vox_offset, origin = "start");
+  # seek(fid, where = hdr@vox_offset, origin = "start"); # myc commented out
 
   dtype = as.character(hdr@datatype)
   what_func = switch(
@@ -163,4 +203,8 @@ write_cifti = function(res) {
   cifti_dim = img_dim[6:8]
   vals = array(vals, dim = cifti_dim)
 
+  # Write data
+  writeBin(object = as.double(vals), con = fid, size = size) # MYC
+
+  close(fid)
 }
