@@ -15,7 +15,7 @@ write_nifti_2_hdr = function(hdr, filename = tempfile()) {
   }
 
   writeBin(as.integer(hdr@"sizeof_hdr"), fid, size=4)
-  writeChar(hdr@magic, fid, nchars = 8, eos = NULL)
+  writeBin(as.integer(hdr@"magic"), fid, size=1)
   writeBin(as.integer(hdr@"datatype"), fid, size=2)
   writeBin(as.integer(hdr@"bitpix"), fid, size=2)
 
